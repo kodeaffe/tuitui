@@ -1,35 +1,118 @@
 mod database;
 mod home;
-mod menuitem;
+mod footer;
+mod menu;
 mod bird;
 
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+use footer::render_footer;
 use home::render_home;
-use menuitem::MenuItem;
+use menu::{MenuItem, render_menu};
 use bird::{add_random_bird, bird_count, remove_bird, render_birds};
 use std::io;
+use std::io::Stdout;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{
-        Block, BorderType, Borders, ListState, Paragraph, Tabs,
-    },
+    layout::{Constraint, Direction, Layout},
+    widgets::ListState,
+    Frame,
     Terminal,
 };
-
+use crossterm::event::KeyEvent;
 
 
 enum Event<I> {
     Input(I),
     Tick,
+}
+
+fn handle_event(
+    rx: &mpsc::Receiver<Event<KeyEvent>>,
+    bird_list_state: &mut ListState,
+) -> Result<MenuItem, Box<dyn std::error::Error>> {
+    match rx.recv()? {
+        Event::Input(event) => match event.code {
+            KeyCode::Char('q') => {
+
+                Ok(MenuItem::Quit)
+            }
+            KeyCode::Char('h') => Ok(MenuItem::Home),
+            KeyCode::Char('b') => Ok(MenuItem::Birds),
+            KeyCode::Char('a') => {
+                add_random_bird().expect("can add new random bird");
+                Ok(MenuItem::Birds)
+            }
+            KeyCode::Char('d') => {
+                remove_bird(bird_list_state).expect("can remove bird");
+                Ok(MenuItem::Birds)
+            }
+            KeyCode::Down => {
+                if let Some(selected) = bird_list_state.selected() {
+                    if selected >= bird_count() - 1 {
+                        bird_list_state.select(Some(0));
+                    } else {
+                        bird_list_state.select(Some(selected + 1));
+                    }
+                }
+                Ok(MenuItem::Birds)
+            }
+            KeyCode::Up => {
+                if let Some(selected) = bird_list_state.selected() {
+                    if selected > 0 {
+                        bird_list_state.select(Some(selected - 1));
+                    } else {
+                        bird_list_state.select(Some(bird_count() - 1));
+                    }
+                }
+                Ok(MenuItem::Birds)
+            }
+            _ => Ok(MenuItem::None)
+        },
+        Event::Tick => Ok(MenuItem::None),
+    }
+}
+
+
+fn render_layout(
+    active_menu_item: MenuItem,
+    bird_list_state: &mut ListState,
+    rect: &mut Frame<'_, CrosstermBackend<Stdout>>,
+)  {
+    let size = rect.size();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(2)
+        .constraints(
+            [
+                Constraint::Length(3),
+                Constraint::Min(2),
+                Constraint::Length(3),
+            ]
+            .as_ref(),
+        )
+        .split(size);
+    rect.render_widget(render_menu(active_menu_item), chunks[0]);
+    match active_menu_item {
+        MenuItem::Birds => {
+            let birds_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(
+                    [Constraint::Percentage(20), Constraint::Percentage(80)].as_ref(),
+                )
+                .split(chunks[1]);
+            let (left, right) = render_birds(bird_list_state);
+            rect.render_stateful_widget(left, birds_chunks[0], bird_list_state);
+            rect.render_widget(right, birds_chunks[1]);
+        },
+        _ => rect.render_widget(render_home(), chunks[1]),
+    }
+    rect.render_widget(render_footer(), chunks[2]);
 }
 
 
@@ -64,118 +147,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let menu_titles = vec!["Home", "Birds", "Add", "Delete", "Quit"];
     let mut active_menu_item = MenuItem::Home;
     let mut bird_list_state = ListState::default();
     bird_list_state.select(Some(0));
-
     loop {
         terminal.draw(|rect| {
-            let size = rect.size();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(2)
-                .constraints(
-                    [
-                        Constraint::Length(3),
-                        Constraint::Min(2),
-                        Constraint::Length(3),
-                    ]
-                    .as_ref(),
-                )
-                .split(size);
-
-            let copyright = Paragraph::new("tuitui 2021 - all rights reversed")
-                .style(Style::default().fg(Color::LightCyan))
-                .alignment(Alignment::Center)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .style(Style::default().fg(Color::White))
-                        .title("Copyright")
-                        .border_type(BorderType::Plain),
-                );
-
-            let menu = menu_titles
-                .iter()
-                .map(|t| {
-                    let (first, rest) = t.split_at(1);
-                    Spans::from(vec![
-                        Span::styled(
-                            first,
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::UNDERLINED),
-                        ),
-                        Span::styled(rest, Style::default().fg(Color::White)),
-                    ])
-                })
-                .collect();
-
-            let tabs = Tabs::new(menu)
-                .select(active_menu_item.into())
-                .block(Block::default().title("Menu").borders(Borders::ALL))
-                .style(Style::default().fg(Color::White))
-                .highlight_style(Style::default().fg(Color::Yellow))
-                .divider(Span::raw("|"));
-
-            rect.render_widget(tabs, chunks[0]);
-            match active_menu_item {
-                MenuItem::Home => rect.render_widget(render_home(), chunks[1]),
-                MenuItem::Birds => {
-                    let birds_chunks = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints(
-                            [Constraint::Percentage(20), Constraint::Percentage(80)].as_ref(),
-                        )
-                        .split(chunks[1]);
-                    let (left, right) = render_birds(&bird_list_state);
-                    rect.render_stateful_widget(left, birds_chunks[0], &mut bird_list_state);
-                    rect.render_widget(right, birds_chunks[1]);
-                }
-            }
-            rect.render_widget(copyright, chunks[2]);
+            render_layout(active_menu_item, &mut bird_list_state, rect);
         })?;
-
-        match rx.recv()? {
-            Event::Input(event) => match event.code {
-                KeyCode::Char('q') => {
-                    disable_raw_mode()?;
-                    terminal.show_cursor()?;
-                    terminal.clear()?;
-                    break;
+        match handle_event(&rx, &mut bird_list_state) {
+            Ok(item) => {
+                if item != MenuItem::None {
+                    active_menu_item = item;
                 }
-                KeyCode::Char('h') => active_menu_item = MenuItem::Home,
-                KeyCode::Char('b') => active_menu_item = MenuItem::Birds,
-                KeyCode::Char('a') => {
-                    add_random_bird().expect("can add new random bird");
-                }
-                KeyCode::Char('d') => {
-                    remove_bird(&mut bird_list_state).expect("can remove bird");
-                }
-                KeyCode::Down => {
-                    if let Some(selected) = bird_list_state.selected() {
-                        if selected >= bird_count() - 1 {
-                            bird_list_state.select(Some(0));
-                        } else {
-                            bird_list_state.select(Some(selected + 1));
-                        }
-                    }
-                }
-                KeyCode::Up => {
-                    if let Some(selected) = bird_list_state.selected() {
-                        if selected > 0 {
-                            bird_list_state.select(Some(selected - 1));
-                        } else {
-                            bird_list_state.select(Some(bird_count() - 1));
-                        }
-                    }
-                }
-                _ => {}
             },
-            Event::Tick => {}
+            Err(e) => { return Err(e); },
+        }
+        if active_menu_item == MenuItem::Quit {
+            disable_raw_mode()?;
+            terminal.show_cursor()?;
+            terminal.clear()?;
+            break;
         }
     }
-
     Ok(())
 }
