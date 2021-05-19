@@ -6,7 +6,7 @@ use tui::{
     style::{Color, Modifier, Style},
     text::{Span, Spans},
     widgets::{
-        Block, BorderType, Borders, Cell, List, ListItem, ListState, Row, Table
+        Block, BorderType, Borders, Cell, List, ListItem, Row, Table
     },
 };
 
@@ -23,7 +23,7 @@ pub struct Bird {
 }
 
 
-pub fn render_birds<'a>(bird_list_state: &ListState) -> (List<'a>, Table<'a>) {
+pub fn render_birds<'a>(selected: usize) -> (List<'a>, Table<'a>) {
     let birds = Block::default()
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::White))
@@ -45,8 +45,6 @@ pub fn render_birds<'a>(bird_list_state: &ListState) -> (List<'a>, Table<'a>) {
             .fg(Color::Black)
             .add_modifier(Modifier::BOLD),
     );
-
-    let selected = bird_list_state.selected().expect("there is always a selected bird");
     let selected_bird: Bird;
     if let Some(bird) = bird_list.get(selected) {
         selected_bird = bird.clone();
@@ -102,19 +100,14 @@ pub fn render_birds<'a>(bird_list_state: &ListState) -> (List<'a>, Table<'a>) {
 }
 
 
-pub fn remove_bird(bird_list_state: &mut ListState) -> Result<(), Error> {
-    if let Some(selected) = bird_list_state.selected() {
-        let mut bird_list = read_db::<Bird>()?;
-        match bird_list.get(selected) {
-            Some(_) => {
-                bird_list.remove(selected);
-                write_db::<Bird>(&bird_list)?;
-                if selected > 0 {
-                    bird_list_state.select(Some(selected - 1));
-                }
-            },
-            _ => (),
-        };
+pub fn remove_bird(selected: usize) -> Result<(), Error> {
+    let mut bird_list = read_db::<Bird>()?;
+    match bird_list.get(selected) {
+        Some(_) => {
+            bird_list.remove(selected);
+            write_db::<Bird>(&bird_list)?;
+        },
+        _ => (),
     }
     Ok(())
 }

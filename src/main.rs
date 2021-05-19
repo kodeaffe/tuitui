@@ -52,7 +52,9 @@ fn render_layout(
                     [Constraint::Percentage(20), Constraint::Percentage(80)].as_ref(),
                 )
                 .split(chunks[1]);
-            let (left, right) = render_birds(bird_list_state);
+            let selected = bird_list_state.selected()
+                .expect("there is always a selected bird");
+            let (left, right) = render_birds(selected);
             rect.render_stateful_widget(left, birds_chunks[0], bird_list_state);
             rect.render_widget(right, birds_chunks[1]);
         },
@@ -87,8 +89,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         active_menu_item = MenuItem::Birds;
                     },
                     Key::Char('d') => {
-                        remove_bird(&mut bird_list_state).expect("can remove bird");
-                        active_menu_item = MenuItem::Birds;
+                        if let Some(selected) = bird_list_state.selected() {
+                            remove_bird(selected).expect("can remove bird");
+                            if selected > 0 {
+                                bird_list_state.select(Some(selected - 1));
+                            }
+                            active_menu_item = MenuItem::Birds;
+                        }
                     },
                     Key::Down => {
                         if let Some(selected) = bird_list_state.selected() {
