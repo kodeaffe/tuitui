@@ -4,10 +4,6 @@ mod footer;
 mod menu;
 mod bird;
 
-use crossterm::{
-    event::{self, Event as CEvent, KeyCode},
-    terminal::{disable_raw_mode, enable_raw_mode},
-};
 use footer::render_footer;
 use home::render_home;
 use menu::{MenuItem, render_menu};
@@ -17,64 +13,55 @@ use std::io::Stdout;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+use termion::raw::{IntoRawMode, RawTerminal};
+use termion::event::{Event, Key};
+use termion::input::TermRead;
 use tui::{
-    backend::CrosstermBackend,
+    backend::TermionBackend,
     layout::{Constraint, Direction, Layout},
     widgets::ListState,
     Frame,
     Terminal,
 };
-use crossterm::event::KeyEvent;
 
-
-enum Event<I> {
-    Input(I),
-    Tick,
-}
 
 fn handle_event(
-    rx: &mpsc::Receiver<Event<KeyEvent>>,
+    rx: &mpsc::Receiver<Event>,
     bird_list_state: &mut ListState,
 ) -> Result<MenuItem, Box<dyn std::error::Error>> {
     match rx.recv()? {
-        Event::Input(event) => match event.code {
-            KeyCode::Char('q') => {
-
-                Ok(MenuItem::Quit)
-            }
-            KeyCode::Char('h') => Ok(MenuItem::Home),
-            KeyCode::Char('b') => Ok(MenuItem::Birds),
-            KeyCode::Char('a') => {
-                add_random_bird().expect("can add new random bird");
-                Ok(MenuItem::Birds)
-            }
-            KeyCode::Char('d') => {
-                remove_bird(bird_list_state).expect("can remove bird");
-                Ok(MenuItem::Birds)
-            }
-            KeyCode::Down => {
-                if let Some(selected) = bird_list_state.selected() {
-                    if selected >= bird_count() - 1 {
-                        bird_list_state.select(Some(0));
-                    } else {
-                        bird_list_state.select(Some(selected + 1));
-                    }
+        Event::Key(Key::Char('q')) => Ok(MenuItem::Quit),
+        Event::Key(Key::Char('h')) => Ok(MenuItem::Home),
+        Event::Key(Key::Char('b')) => Ok(MenuItem::Birds),
+        Event::Key(Key::Char('a')) => {
+            add_random_bird().expect("can add new random bird");
+            Ok(MenuItem::Birds)
+        }
+        Event::Key(Key::Char('d')) => {
+            remove_bird(bird_list_state).expect("can remove bird");
+            Ok(MenuItem::Birds)
+        }
+        Event::Key(Key::Down) => {
+            if let Some(selected) = bird_list_state.selected() {
+                if selected >= bird_count() - 1 {
+                    bird_list_state.select(Some(0));
+                } else {
+                    bird_list_state.select(Some(selected + 1));
                 }
-                Ok(MenuItem::Birds)
             }
-            KeyCode::Up => {
-                if let Some(selected) = bird_list_state.selected() {
-                    if selected > 0 {
-                        bird_list_state.select(Some(selected - 1));
-                    } else {
-                        bird_list_state.select(Some(bird_count() - 1));
-                    }
+            Ok(MenuItem::Birds)
+        }
+        Event::Key(Key::Up) => {
+            if let Some(selected) = bird_list_state.selected() {
+                if selected > 0 {
+                    bird_list_state.select(Some(selected - 1));
+                } else {
+                    bird_list_state.select(Some(bird_count() - 1));
                 }
-                Ok(MenuItem::Birds)
             }
-            _ => Ok(MenuItem::None)
-        },
-        Event::Tick => Ok(MenuItem::None),
+            Ok(MenuItem::Birds)
+        }
+        _ => Ok(MenuItem::None)
     }
 }
 
@@ -82,7 +69,7 @@ fn handle_event(
 fn render_layout(
     active_menu_item: MenuItem,
     bird_list_state: &mut ListState,
-    rect: &mut Frame<'_, CrosstermBackend<Stdout>>,
+    rect: &mut Frame<'_, TermionBackend<RawTerminal<Stdout>>>,
 )  {
     let size = rect.size();
     let chunks = Layout::default()
@@ -117,33 +104,23 @@ fn render_layout(
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    enable_raw_mode().expect("can run in raw mode");
-
     let (tx, rx) = mpsc::channel();
     let tick_rate = Duration::from_millis(200);
     thread::spawn(move || {
         let mut last_tick = Instant::now();
         loop {
-            let timeout = tick_rate
-                .checked_sub(last_tick.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0));
-
-            if event::poll(timeout).expect("poll works") {
-                if let CEvent::Key(key) = event::read().expect("can read events") {
-                    tx.send(Event::Input(key)).expect("can send events");
-                }
+            for c in std::io::stdin().events() {
+                let evt = c.unwrap();
+                tx.send(evt).expect("can send events");
             }
-
             if last_tick.elapsed() >= tick_rate {
-                if let Ok(_) = tx.send(Event::Tick) {
-                    last_tick = Instant::now();
-                }
+                last_tick = Instant::now();
             }
         }
     });
 
-    let stdout = io::stdout();
-    let backend = CrosstermBackend::new(stdout);
+    let stdout = io::stdout().into_raw_mode()?;
+    let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
@@ -163,8 +140,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => { return Err(e); },
         }
         if active_menu_item == MenuItem::Quit {
-            disable_raw_mode()?;
-            terminal.show_cursor()?;
             terminal.clear()?;
             break;
         }
